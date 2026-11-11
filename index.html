@@ -31,7 +31,7 @@
     .topbar { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
     .brand { display: flex; align-items: center; gap: 11px; color: var(--ink); font-weight: 780; letter-spacing: -.035em; }
     .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 12px; color: #fff; background: var(--green); font-size: 15px; }
-    .top-actions { display: flex; align-items: center; gap: 9px; }
+    .top-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; }
     .save-state { color: var(--muted); font-size: 11px; }
     main { padding-bottom: 48px; }
     .hero { padding: 38px 0 24px; }
@@ -247,8 +247,10 @@
         <button class="button button-quiet" id="export-button" type="button">Gem alt som fil</button>
         <button class="button button-quiet" id="export-shortlist-button" type="button">Del finalister</button>
         <button class="button button-quiet" id="import-button" type="button">Importér data</button>
+        <button class="button button-quiet" id="bulk-import-button" type="button" title="Vælg flere stemme- eller rolleønske-filer på én gang" aria-label="Importér flere stemme- eller rolleønske-filer">Importér flere svar</button>
         <button class="button button-danger" id="clear-data-button" type="button">Slet alle data</button>
         <input class="file-input" id="import-file" type="file" accept="application/json,.json">
+        <input class="file-input" id="bulk-import-files" type="file" accept="application/json,.json" multiple>
       </div>
     </header>
     <main>
@@ -270,7 +272,7 @@
           </div>
         </div>
       </section>
-      <div class="notice"><strong>Offline-version:</strong> Data deles ikke automatisk mellem deltagere. Arrangøren eksporterer indslagene og sender filen til deltagerne. Hver deltager importerer filen på sin egen enhed, stemmer og sender sin datafil til arrangøren. Efter optællingen eksporterer arrangøren finalisterne uden stemmer; deltagerne sender deres rolleønsker tilbage i en separat datafil. Arrangøren samler filerne. Stemmer og ønsker er ikke adgangskodebeskyttede: del kun svarfiler med arrangøren, ikke med de øvrige deltagere. Live synkronisering og adgangskontrol kræver en server og login.</div>
+      <div class="notice"><strong>Offline-version:</strong> Data deles ikke automatisk mellem deltagere. Arrangøren eksporterer indslagene og sender filen til deltagerne. Hver deltager importerer filen på sin egen enhed, stemmer og sender sin datafil til arrangøren. Efter optællingen eksporterer arrangøren finalisterne uden stemmer; deltagerne sender deres rolleønsker tilbage i en separat datafil. Arrangøren kan samle flere stemme- og rolleønskefiler på én gang med “Importér flere svar”. Stemmer og ønsker er ikke adgangskodebeskyttede: del kun svarfiler med arrangøren, ikke med de øvrige deltagere. Live synkronisering og adgangskontrol kræver en server og login.</div>
       <nav class="tabs" role="tablist" aria-label="Neurorevyens sider">
         <button class="tab" id="tab-ideas" role="tab" aria-selected="true" aria-controls="page-ideas" data-page="ideas">1. Indslag</button>
         <button class="tab" id="tab-vote" role="tab" aria-selected="false" aria-controls="page-vote" data-page="vote">2. Afstemning</button>
@@ -846,19 +848,7 @@
         URL.revokeObjectURL(url);
       };
       const validImport = (data) => data && [1, 2].includes(data.version) && Array.isArray(data.items) && Array.isArray(data.votes);
-      const importData = async (file) => {
-        let imported;
-        try {
-          imported = JSON.parse(await file.text());
-        } catch (error) {
-          console.error("Kunne ikke læse de importerede Neurorevy-data", error);
-          alert("Filen indeholder ikke gyldig JSON. Intet blev importeret.");
-          return;
-        }
-        if (!validImport(imported)) {
-          alert("Filen er ikke en understøttet Neurorevy-dataeksport. Intet blev importeret.");
-          return;
-        }
+      const mergeImportedData = (imported) => {
         const itemIds = new Set([...state.items, ...state.programExtras].map((item) => item.id));
         const incomingItems = imported.items.filter((item) => item && typeof item.id === "string" && typeof item.title === "string" && TYPES.includes(item.type));
         const idMap = new Map();
@@ -936,11 +926,63 @@
           const mappedId = idMap.get(id) || id;
           if (validIds.has(mappedId) && !state.casting[mappedId] && Array.isArray(entries)) state.casting[mappedId] = entries;
         });
+        return {
+          votes: imported.votes.filter((vote) => vote && typeof vote.name === "string" && vote.name.trim() && Array.isArray(vote.selections)).length,
+          wishes: (imported.wishes || []).filter((wish) => wish && typeof wish.name === "string" && wish.name.trim() && Array.isArray(wish.selections)).length
+            + imported.votes.filter((vote) => vote && typeof vote.name === "string" && vote.name.trim() && vote.roleWishes?.trim()).length
+        };
+      };
+      const importData = async (file) => {
+        let imported;
+        try {
+          imported = JSON.parse(await file.text());
+        } catch (error) {
+          console.error("Kunne ikke læse de importerede Neurorevy-data", error);
+          alert("Filen indeholder ikke gyldig JSON. Intet blev importeret.");
+          return;
+        }
+        if (!validImport(imported)) {
+          alert("Filen er ikke en understøttet Neurorevy-dataeksport. Intet blev importeret.");
+          return;
+        }
+        mergeImportedData(imported);
         if (save()) {
           render();
           alert("Import fuldført. Indslag er samlet efter titel og type, og stemmer/rolleønsker er samlet efter deltagernavn.");
         } else {
           alert("Data blev importeret, men kunne ikke gemmes i browseren. Eksportér data nu for at beholde dem.");
+        }
+      };
+      const importMultipleData = async (files) => {
+        const selectedFiles = [...files];
+        if (!selectedFiles.length) return;
+        const imports = [];
+        for (const file of selectedFiles) {
+          let imported;
+          try {
+            imported = JSON.parse(await file.text());
+          } catch (error) {
+            console.error(`Kunne ikke læse importfilen "${file.name}"`, error);
+            alert(`Filen "${file.name}" indeholder ikke gyldig JSON. Ingen filer blev importeret.`);
+            return;
+          }
+          if (!validImport(imported)) {
+            alert(`Filen "${file.name}" er ikke en understøttet Neurorevy-dataeksport. Ingen filer blev importeret.`);
+            return;
+          }
+          imports.push(imported);
+        }
+        const totals = imports.reduce((counts, imported) => {
+          const result = mergeImportedData(imported);
+          counts.votes += result.votes;
+          counts.wishes += result.wishes;
+          return counts;
+        }, { votes: 0, wishes: 0 });
+        if (save()) {
+          render();
+          alert(`${imports.length} filer importeret: ${totals.votes} stemmer og ${totals.wishes} rolleønsker behandlet. Svar med samme navn er opdateret.`);
+        } else {
+          alert("Data fra masseimporten blev indlæst, men kunne ikke gemmes i browseren. Eksportér data nu for at beholde dem.");
         }
       };
       document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => showPage(tab.dataset.page)));
@@ -1002,6 +1044,12 @@
       $("#import-file").addEventListener("change", (event) => {
         const file = event.target.files?.[0];
         if (file) importData(file);
+        event.target.value = "";
+      });
+      $("#bulk-import-button").addEventListener("click", () => $("#bulk-import-files").click());
+      $("#bulk-import-files").addEventListener("change", (event) => {
+        const files = event.target.files;
+        if (files?.length) importMultipleData(files);
         event.target.value = "";
       });
       loadTheme();
